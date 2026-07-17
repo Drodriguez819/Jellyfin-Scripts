@@ -1,0 +1,401 @@
+/* ============================================================
+   Cycling library backdrop for Jellyfin Web
+   Paste this whole file into: Dashboard > Plugins > JS Injector
+   > Add Script > (name it) > paste > Save > refresh browser.
+
+   What it does:
+     - Pulls random art (Backdrop or Primary/poster) from YOUR library
+       via the logged-in session's ApiClient (handles auth + base URL).
+     - Cross-fades through it in a fixed, full-viewport layer at
+       z-index -2, so your frosted gradient (::before at z-index -1)
+       sits ON TOP of it = frosted glass over rotating art.
+     - Shows ONLY on the home page and library browse pages (Movies, Shows,
+       etc.) — the same pages your frosted gradient covers. It stays hidden
+       on item detail pages (#itemDetailPage) and the video player
+       (#videoOsdPage), so it never collides with your detail-page CSS or
+       tints playback.
+
+   IMPORTANT: turn OFF the native rotation first, or you'll have two
+   backdrop systems fighting at the same depth:
+     User Preferences > Display > Backdrops  ->  unchecked.
+
+   Reaches browsers + the PC desktop app (jellyfin-web). Native phone/TV
+   apps don't run web JS, so they won't show this (expected).
+   ============================================================ */
+
+(function () {
+    'use strict';
+
+    // ===================== CONFIG =====================
+    const CONFIG = {
+        imageType:  'Backdrop',     // 'Backdrop' (wide fanart) or 'Primary' (tall poster)
+        itemTypes:  'Movie,Series', // e.g. 'Movie' or 'Movie,Series,MusicAlbum'
+        poolSize:   40,             // how many items to pull per refresh
+        intervalMs: 60000,          // ms each image is shown
+        fadeMs:     2000,           // cross-fade duration in ms
+        maxWidth:   1920,           // requested image width
+        brightness: 0.55,           // dim the art so UI stays readable (0-1)
+        blurPx:     7,             // blur the art itself; your CSS .backdropImage blur does NOT reach this custom layer. 0 = off
+        zIndex:     -2              // under your -1 frosted gradient; leave as-is
+    };
+    // ==================================================
+
+    if (window.__cyclingBackdropLoaded) return;       // guard against double-injection
+    window.__cyclingBackdropLoaded = true;
+
+    let urls = [];
+    let idx = 0;
+    let frontIsA = true;
+    let layers = null;
+
+    // Wait until the API client exists AND a user is logged in.
+    function waitForApi() {
+        return new Promise((resolve) => {
+            const check = () => {
+                try {
+                    if (window.ApiClient &&
+                        typeof ApiClient.getCurrentUserId === 'function' &&
+                        ApiClient.getCurrentUserId()) {
+                        return resolve();
+                    }
+                } catch (e) { /* not ready yet */ }
+                setTimeout(check, 500);
+            };
+            check();
+        });
+    }
+
+    function buildLayers() {
+        const wrap = document.createElement('div');
+        wrap.id = 'cyclingBackdrop';
+        Object.assign(wrap.style, {
+            position: 'fixed', inset: '0',
+            width: '100vw', height: '100vh',
+            zIndex: String(CONFIG.zIndex),
+            pointerEvents: 'none', overflow: 'hidden'
+        });
+        const makeLayer = () => {
+            const d = document.createElement('div');
+            Object.assign(d.style, {
+                position: 'absolute', inset: '0',
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+                opacity: '0',
+                transition: 'opacity ' + CONFIG.fadeMs + 'ms ease-in-out',
+                filter: 'brightness(' + CONFIG.brightness + ')' +
+                        (CONFIG.blurPx ? ' blur(' + CONFIG.blurPx + 'px)' : '')
+            });
+            return d;
+        };
+        const a = makeLayer();
+        const b = makeLayer();
+        wrap.appendChild(a);
+        wrap.appendChild(b);
+        document.body.appendChild(wrap);
+        return { wrap, a, b };
+    }
+
+    async function fetchUrls() {
+        try {
+            const userId = ApiClient.getCurrentUserId();
+            const result = await ApiClient.getItems(userId, {
+                IncludeItemTypes: CONFIG.itemTypes,
+                Recursive: true,
+                SortBy: 'Random',
+                Limit: CONFIG.poolSize,
+                ImageTypes: CONFIG.imageType,
+                Fields: 'BackdropImageTags',
+                EnableImageTypes: CONFIG.imageType,
+                ImageTypeLimit: 1
+            });
+            const items = (result && result.Items) || [];
+            urls = items.map((item) => {
+                if (CONFIG.imageType === 'Backdrop') {
+                    const tag = item.BackdropImageTags && item.BackdropImageTags[0];
+                    if (!tag) return null;
+                    return ApiClient.getImageUrl(item.Id, {
+                        type: 'Backdrop', tag: tag, maxWidth: CONFIG.maxWidth
+                    });
+                }
+                const ptag = item.ImageTags && item.ImageTags.Primary;
+                if (!ptag) return null;
+                return ApiClient.getImageUrl(item.Id, {
+                    type: 'Primary', tag: ptag, maxWidth: CONFIG.maxWidth
+                });
+            }).filter(Boolean);
+        } catch (e) {
+            console.warn('[cyclingBackdrop] fetch failed:', e);
+        }
+    }
+
+    function preload(url) {
+        if (!url) return;
+        const img = new Image();
+        img.src = url;
+    }
+
+    function showNext() {
+        if (!urls.length || !layers) return;
+        const url = urls[idx % urls.length];
+        idx++;
+        const incoming = frontIsA ? layers.b : layers.a;
+        const outgoing = frontIsA ? layers.a : layers.b;
+        incoming.style.backgroundImage = 'url("' + url + '")';
+        void incoming.offsetWidth;            // force reflow so the transition runs
+        incoming.style.opacity = '1';
+        outgoing.style.opacity = '0';
+        frontIsA = !frontIsA;
+        preload(urls[idx % urls.length]);     // preload the next one to avoid a flash
+    }
+
+    // Visible = element is actually rendered (not display:none, not removed).
+    // Works regardless of how Jellyfin toggles pages — it dom-caches some.
+    function isVisible(el) {
+        return !!el && el.offsetParent !== null;
+    }
+
+    // Verified against jellyfin-web source:
+    //   home    = <div id="indexPage"      class="page homePage libraryPage ...">
+    //   movies  = <div id="moviesPage"     class="page libraryPage ...">
+    //   shows   = <div id="tvshowsPage"    class="page libraryPage ...">
+    //   detail  = <div id="itemDetailPage" class="page libraryPage itemDetailPage ...">
+    //   player  = <div id="videoOsdPage"   class="page libraryPage ...">
+    // All share `libraryPage`, so gate on the specific IDs to exclude detail
+    // and player. Show only when a home/library-browse page is the visible one.
+    function shouldShow() {
+        if (isVisible(document.getElementById('itemDetailPage'))) return false;
+        if (isVisible(document.getElementById('videoOsdPage'))) return false;
+        const pages = document.querySelectorAll('.homePage, .libraryPage');
+        for (let i = 0; i < pages.length; i++) {
+            const p = pages[i];
+            if (isVisible(p) && p.id !== 'itemDetailPage' && p.id !== 'videoOsdPage') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function visibilityTick() {
+        if (!layers) return;
+        layers.wrap.style.display = shouldShow() ? '' : 'none';
+    }
+
+    async function start() {
+        await waitForApi();
+        layers = buildLayers();
+        visibilityTick();                 // set correct visibility right away (no flash)
+        await fetchUrls();
+        if (!urls.length) {
+            console.warn('[cyclingBackdrop] no images found for', CONFIG.imageType);
+            return;
+        }
+        showNext();
+        setInterval(showNext, CONFIG.intervalMs);
+        setInterval(visibilityTick, 750);
+        // Refresh the random pool every full cycle so it isn't the same 40 forever.
+        setInterval(fetchUrls, CONFIG.intervalMs * CONFIG.poolSize);
+    }
+
+    start();
+})();/* ============================================================
+   Cycling library backdrop for Jellyfin Web
+   Paste this whole file into: Dashboard > Plugins > JS Injector
+   > Add Script > (name it) > paste > Save > refresh browser.
+
+   What it does:
+     - Pulls random art (Backdrop or Primary/poster) from YOUR library
+       via the logged-in session's ApiClient (handles auth + base URL).
+     - Cross-fades through it in a fixed, full-viewport layer at
+       z-index -2, so your frosted gradient (::before at z-index -1)
+       sits ON TOP of it = frosted glass over rotating art.
+     - Shows ONLY on the home page and library browse pages (Movies, Shows,
+       etc.) — the same pages your frosted gradient covers. It stays hidden
+       on item detail pages (#itemDetailPage) and the video player
+       (#videoOsdPage), so it never collides with your detail-page CSS or
+       tints playback.
+
+   IMPORTANT: turn OFF the native rotation first, or you'll have two
+   backdrop systems fighting at the same depth:
+     User Preferences > Display > Backdrops  ->  unchecked.
+
+   Reaches browsers + the PC desktop app (jellyfin-web). Native phone/TV
+   apps don't run web JS, so they won't show this (expected).
+   ============================================================ */
+
+(function () {
+    'use strict';
+
+    // ===================== CONFIG =====================
+    const CONFIG = {
+        imageType:  'Backdrop',     // 'Backdrop' (wide fanart) or 'Primary' (tall poster)
+        itemTypes:  'Movie,Series', // e.g. 'Movie' or 'Movie,Series,MusicAlbum'
+        poolSize:   40,             // how many items to pull per refresh
+        intervalMs: 60000,          // ms each image is shown
+        fadeMs:     2000,           // cross-fade duration in ms
+        maxWidth:   1920,           // requested image width
+        brightness: 0.55,           // dim the art so UI stays readable (0-1)
+        blurPx:     7,             // blur the art itself; your CSS .backdropImage blur does NOT reach this custom layer. 0 = off
+        zIndex:     -2              // under your -1 frosted gradient; leave as-is
+    };
+    // ==================================================
+
+    if (window.__cyclingBackdropLoaded) return;       // guard against double-injection
+    window.__cyclingBackdropLoaded = true;
+
+    let urls = [];
+    let idx = 0;
+    let frontIsA = true;
+    let layers = null;
+
+    // Wait until the API client exists AND a user is logged in.
+    function waitForApi() {
+        return new Promise((resolve) => {
+            const check = () => {
+                try {
+                    if (window.ApiClient &&
+                        typeof ApiClient.getCurrentUserId === 'function' &&
+                        ApiClient.getCurrentUserId()) {
+                        return resolve();
+                    }
+                } catch (e) { /* not ready yet */ }
+                setTimeout(check, 500);
+            };
+            check();
+        });
+    }
+
+    function buildLayers() {
+        const wrap = document.createElement('div');
+        wrap.id = 'cyclingBackdrop';
+        Object.assign(wrap.style, {
+            position: 'fixed', inset: '0',
+            width: '100vw', height: '100vh',
+            zIndex: String(CONFIG.zIndex),
+            pointerEvents: 'none', overflow: 'hidden'
+        });
+        const makeLayer = () => {
+            const d = document.createElement('div');
+            Object.assign(d.style, {
+                position: 'absolute', inset: '0',
+                backgroundSize: 'cover',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+                opacity: '0',
+                transition: 'opacity ' + CONFIG.fadeMs + 'ms ease-in-out',
+                filter: 'brightness(' + CONFIG.brightness + ')' +
+                        (CONFIG.blurPx ? ' blur(' + CONFIG.blurPx + 'px)' : '')
+            });
+            return d;
+        };
+        const a = makeLayer();
+        const b = makeLayer();
+        wrap.appendChild(a);
+        wrap.appendChild(b);
+        document.body.appendChild(wrap);
+        return { wrap, a, b };
+    }
+
+    async function fetchUrls() {
+        try {
+            const userId = ApiClient.getCurrentUserId();
+            const result = await ApiClient.getItems(userId, {
+                IncludeItemTypes: CONFIG.itemTypes,
+                Recursive: true,
+                SortBy: 'Random',
+                Limit: CONFIG.poolSize,
+                ImageTypes: CONFIG.imageType,
+                Fields: 'BackdropImageTags',
+                EnableImageTypes: CONFIG.imageType,
+                ImageTypeLimit: 1
+            });
+            const items = (result && result.Items) || [];
+            urls = items.map((item) => {
+                if (CONFIG.imageType === 'Backdrop') {
+                    const tag = item.BackdropImageTags && item.BackdropImageTags[0];
+                    if (!tag) return null;
+                    return ApiClient.getImageUrl(item.Id, {
+                        type: 'Backdrop', tag: tag, maxWidth: CONFIG.maxWidth
+                    });
+                }
+                const ptag = item.ImageTags && item.ImageTags.Primary;
+                if (!ptag) return null;
+                return ApiClient.getImageUrl(item.Id, {
+                    type: 'Primary', tag: ptag, maxWidth: CONFIG.maxWidth
+                });
+            }).filter(Boolean);
+        } catch (e) {
+            console.warn('[cyclingBackdrop] fetch failed:', e);
+        }
+    }
+
+    function preload(url) {
+        if (!url) return;
+        const img = new Image();
+        img.src = url;
+    }
+
+    function showNext() {
+        if (!urls.length || !layers) return;
+        const url = urls[idx % urls.length];
+        idx++;
+        const incoming = frontIsA ? layers.b : layers.a;
+        const outgoing = frontIsA ? layers.a : layers.b;
+        incoming.style.backgroundImage = 'url("' + url + '")';
+        void incoming.offsetWidth;            // force reflow so the transition runs
+        incoming.style.opacity = '1';
+        outgoing.style.opacity = '0';
+        frontIsA = !frontIsA;
+        preload(urls[idx % urls.length]);     // preload the next one to avoid a flash
+    }
+
+    // Visible = element is actually rendered (not display:none, not removed).
+    // Works regardless of how Jellyfin toggles pages — it dom-caches some.
+    function isVisible(el) {
+        return !!el && el.offsetParent !== null;
+    }
+
+    // Verified against jellyfin-web source:
+    //   home    = <div id="indexPage"      class="page homePage libraryPage ...">
+    //   movies  = <div id="moviesPage"     class="page libraryPage ...">
+    //   shows   = <div id="tvshowsPage"    class="page libraryPage ...">
+    //   detail  = <div id="itemDetailPage" class="page libraryPage itemDetailPage ...">
+    //   player  = <div id="videoOsdPage"   class="page libraryPage ...">
+    // All share `libraryPage`, so gate on the specific IDs to exclude detail
+    // and player. Show only when a home/library-browse page is the visible one.
+    function shouldShow() {
+        if (isVisible(document.getElementById('itemDetailPage'))) return false;
+        if (isVisible(document.getElementById('videoOsdPage'))) return false;
+        const pages = document.querySelectorAll('.homePage, .libraryPage');
+        for (let i = 0; i < pages.length; i++) {
+            const p = pages[i];
+            if (isVisible(p) && p.id !== 'itemDetailPage' && p.id !== 'videoOsdPage') {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function visibilityTick() {
+        if (!layers) return;
+        layers.wrap.style.display = shouldShow() ? '' : 'none';
+    }
+
+    async function start() {
+        await waitForApi();
+        layers = buildLayers();
+        visibilityTick();                 // set correct visibility right away (no flash)
+        await fetchUrls();
+        if (!urls.length) {
+            console.warn('[cyclingBackdrop] no images found for', CONFIG.imageType);
+            return;
+        }
+        showNext();
+        setInterval(showNext, CONFIG.intervalMs);
+        setInterval(visibilityTick, 750);
+        // Refresh the random pool every full cycle so it isn't the same 40 forever.
+        setInterval(fetchUrls, CONFIG.intervalMs * CONFIG.poolSize);
+    }
+
+    start();
+})();
