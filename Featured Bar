@@ -1,0 +1,404 @@
+/* ============================================================
+   Featured Media Bar for Jellyfin Web  (tunable + swipe)
+   Paste into: Dashboard > Plugins > JS Injector > Add Script.
+
+   Rotating hero ABOVE "My Media" on the home page. Everything is
+   adjustable in CONFIG. Supports clickable dots AND left/right swipe
+   (touch + mouse drag). Edit values, Save, refresh.
+   ============================================================ */
+
+(function () {
+    'use strict';
+
+    // ============================================================
+    //  CONFIG
+    // ============================================================
+    const CONFIG = {
+
+        // ---- WHAT TO SHOW & ROTATION ----
+        itemTypes:   'Movie,Series',
+        sortBy:      'Random',        // 'Random' or 'DateCreated'
+        sortOrder:   'Descending',
+        count:       8,
+        rotateMs:    10000,
+        fadeMs:      900,
+
+        // ---- BAR (HEADER) SIZE ----
+        heightDesktop: '440px',
+        heightTablet:  '400px',
+        heightMobile:  '390px',       // lowered a touch (was 440)
+        maxHeightVh:   62,
+        radius:        '12px',
+        marginBottom:  '1.5em',
+
+        // ---- CONTENT BOX ----
+        contentMaxWidthDesktop: '55%',
+        contentMaxWidthMobile:  '66%',
+        contentVAlign:          'flex-end',  // flex-start | center | flex-end
+        paddingDesktop:         '2.5em',
+        paddingMobile:          '1.3em',
+
+        // ---- NAME (logo image, falls back to title text) ----
+        showLogo:             true,
+        logoReqHeight:        300,
+        logoMaxHeightDesktop: '120px',
+        logoMaxHeightMobile:  '78px',     // smaller on phones so it fits the shorter bar
+        titleFontDesktop:     '2.3rem',
+        titleFontMobile:      '1.55rem',
+
+        // ---- META LINE ----
+        showMeta:  true,
+        metaFont:  '.9rem',
+        maxGenres: 3,
+
+        // ---- OVERVIEW ----
+        showOverview:         true,
+        overviewLinesDesktop: 3,
+        overviewLinesMobile:  3,      // 3 fits the smaller mobile height cleanly
+        overviewFont:         '.95rem',
+
+        // ---- SCRIM ----
+        scrimStrength: 0.85,          // 0..1
+
+        // ---- INFO BUTTON ----
+        showInfoButton: true,
+        infoButtonText: 'More Info \u203a',
+
+        // ---- DOTS ----
+        showDots:    true,
+        dotsCorner:  'right',         // 'right' | 'center'
+
+        // ---- SWIPE ----
+        enableSwipe:      true,
+        swipeThresholdPx: 45          // min horizontal travel to count as a swipe
+    };
+    // ============================================================
+
+    if (window.__featuredBarLoaded) return;
+    window.__featuredBarLoaded = true;
+
+    let items = [], index = 0, frontA = true, currentItem = null;
+    let barEl = null, els = {}, rotTimer = null;
+    let nameToken = 0;               // guards async logo loads against stale slides
+    let appliedLines = 0;           // last overview line-clamp applied by fitContent
+
+    // ---------- stylesheet ----------
+    function buildCss() {
+        const s = CONFIG.scrimStrength;
+        const dotsX = CONFIG.dotsCorner === 'center'
+            ? 'left:50%; transform:translateX(-50%);'
+            : 'right:clamp(.8em,2vw,1.5em);';
+        return `
+#featuredBar, #featuredBar * { box-sizing: border-box; }
+#featuredBar {
+    position: relative; width: 100%;
+    height: ${CONFIG.heightDesktop}; max-height: ${CONFIG.maxHeightVh}vh;
+    margin: 0 0 ${CONFIG.marginBottom} 0; border-radius: ${CONFIG.radius};
+    overflow: hidden; cursor: pointer; isolation: isolate;
+    touch-action: pan-y;            /* let vertical scroll pass, keep horizontal for swipe */
+    user-select: none;
+}
+.featuredBar-bd {
+    position: absolute; inset: 0;
+    background-size: cover; background-position: center; background-repeat: no-repeat;
+    opacity: 0; transition: opacity ${CONFIG.fadeMs}ms ease-in-out; z-index: 0;
+}
+.featuredBar-scrim {
+    position: absolute; inset: 0; z-index: 1; pointer-events: none;
+    background:
+        linear-gradient(90deg, rgba(0,0,0,${s}) 0%, rgba(0,0,0,${s * 0.5}) 45%, rgba(0,0,0,0) 78%),
+        linear-gradient(0deg,  rgba(0,0,0,${s * 0.9}) 0%, rgba(0,0,0,0) 55%);
+}
+.featuredBar-content {
+    position: absolute; left: 0; top: 0; bottom: 0; z-index: 2; color: #fff;
+    display: flex; flex-direction: column; justify-content: ${CONFIG.contentVAlign};
+    align-items: flex-start; gap: .15em; padding: ${CONFIG.paddingDesktop};
+    max-width: ${CONFIG.contentMaxWidthDesktop}; overflow: hidden; pointer-events: none;
+}
+.featuredBar-content .featuredBar-btn { pointer-events: auto; }
+.featuredBar-logo {
+    max-height: ${CONFIG.logoMaxHeightDesktop}; max-width: min(80%, 420px);
+    object-fit: contain; object-position: left bottom; display: none;
+    margin-bottom: .4em; flex: 0 0 auto; filter: drop-shadow(0 2px 10px rgba(0,0,0,.7));
+}
+.featuredBar-title {
+    font-size: ${CONFIG.titleFontDesktop}; font-weight: 700; line-height: 1.1;
+    text-shadow: 0 2px 12px rgba(0,0,0,.85); margin-bottom: .25em; flex-shrink: 0;
+}
+.featuredBar-meta {
+    font-size: ${CONFIG.metaFont}; opacity: .9; margin-bottom: .45em;
+    text-shadow: 0 1px 6px rgba(0,0,0,.85); flex-shrink: 0;
+}
+.featuredBar-overview {
+    font-size: ${CONFIG.overviewFont}; line-height: 1.45; opacity: .92;
+    text-shadow: 0 1px 6px rgba(0,0,0,.85); margin-bottom: 1em;
+    flex: 0 1 auto; min-height: 0;            /* this is what shrinks; the name never does */
+    display: -webkit-box; -webkit-box-orient: vertical;
+    -webkit-line-clamp: ${CONFIG.overviewLinesDesktop}; overflow: hidden;
+}
+.featuredBar-buttons { display: flex; gap: .6em; flex-wrap: wrap; flex-shrink: 0; }
+.featuredBar-btn {
+    border: none; border-radius: 8px; padding: .6em 1.3em;
+    font-size: .95rem; font-weight: 600; cursor: pointer;
+    background: rgba(255,255,255,.92); color: #111;
+}
+.featuredBar-dots {
+    position: absolute; ${dotsX} bottom: clamp(.8em,2vw,1.2em);
+    z-index: 3; display: ${CONFIG.showDots ? 'flex' : 'none'}; gap: .5em;
+}
+.featuredBar-dot {
+    width: 9px; height: 9px; border-radius: 50%; cursor: pointer;
+    background: rgba(255,255,255,.4); transition: background .2s, transform .2s;
+}
+.featuredBar-dot.is-active { background: #fff; transform: scale(1.25); }
+
+@media (max-width: 1000px) { #featuredBar { height: ${CONFIG.heightTablet}; } }
+@media (max-width: 600px) {
+    #featuredBar { height: ${CONFIG.heightMobile}; }
+    .featuredBar-content { max-width: ${CONFIG.contentMaxWidthMobile}; padding: ${CONFIG.paddingMobile}; }
+    .featuredBar-logo { max-height: ${CONFIG.logoMaxHeightMobile}; }
+    .featuredBar-title { font-size: ${CONFIG.titleFontMobile}; }
+    .featuredBar-overview { -webkit-line-clamp: ${CONFIG.overviewLinesMobile}; margin-bottom: .6em; }
+}`;
+    }
+    function injectStyles() {
+        if (document.getElementById('featuredBar-styles')) return;
+        const st = document.createElement('style');
+        st.id = 'featuredBar-styles'; st.textContent = buildCss();
+        document.head.appendChild(st);
+    }
+
+    // ---------- helpers ----------
+    function waitForApi() {
+        return new Promise((resolve) => {
+            const tick = () => {
+                try {
+                    if (window.ApiClient && typeof ApiClient.getCurrentUserId === 'function' &&
+                        ApiClient.getCurrentUserId()) return resolve();
+                } catch (e) { /* */ }
+                setTimeout(tick, 500);
+            };
+            tick();
+        });
+    }
+    function fmtRuntime(t) {
+        if (!t) return '';
+        const mins = Math.round(t / 600000000), h = Math.floor(mins / 60), m = mins % 60;
+        return h ? (h + 'h ' + (m ? m + 'm' : '')).trim() : m + 'm';
+    }
+    function buildMeta(item) {
+        const p = [];
+        if (item.ProductionYear) p.push(item.ProductionYear);
+        if (item.OfficialRating) p.push(item.OfficialRating);
+        const rt = fmtRuntime(item.RunTimeTicks); if (rt) p.push(rt);
+        if (item.CommunityRating) p.push('\u2605 ' + item.CommunityRating.toFixed(1));
+        if (item.Genres && item.Genres.length) p.push(item.Genres.slice(0, CONFIG.maxGenres).join(', '));
+        return p.join('   \u2022   ');
+    }
+    function navigateToItem(item) {
+        if (!item) return;
+        const sid = item.ServerId || (window.ApiClient && ApiClient.serverId && ApiClient.serverId()) || '';
+        window.location.hash = '#/details?id=' + item.Id + (sid ? '&serverId=' + sid : '');
+    }
+
+    // ---------- data ----------
+    async function fetchItems() {
+        const userId = ApiClient.getCurrentUserId();
+        const q = {
+            IncludeItemTypes: CONFIG.itemTypes, Recursive: true, Limit: CONFIG.count, SortBy: CONFIG.sortBy,
+            Fields: 'Overview,Genres,RunTimeTicks,ProductionYear,CommunityRating,OfficialRating,BackdropImageTags',
+            ImageTypeLimit: 1, EnableImageTypes: 'Backdrop,Logo,Primary'
+        };
+        if (CONFIG.sortBy === 'DateCreated') q.SortOrder = CONFIG.sortOrder;
+        const res = await ApiClient.getItems(userId, q);
+        items = ((res && res.Items) || []).filter(
+            (it) => (it.BackdropImageTags && it.BackdropImageTags.length) ||
+                    (it.ImageTags && it.ImageTags.Primary));
+    }
+
+    // ---------- build ----------
+    function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+
+    function buildBar() {
+        const bar = el('div'); bar.id = 'featuredBar';
+        const bdA = el('div', 'featuredBar-bd'), bdB = el('div', 'featuredBar-bd');
+        const scrim = el('div', 'featuredBar-scrim');
+        const content = el('div', 'featuredBar-content');
+        const logo = el('img', 'featuredBar-logo');
+        const title = el('div', 'featuredBar-title');
+        content.appendChild(logo); content.appendChild(title);
+
+        let meta = null, overview = null;
+        if (CONFIG.showMeta) { meta = el('div', 'featuredBar-meta'); content.appendChild(meta); }
+        if (CONFIG.showOverview) { overview = el('div', 'featuredBar-overview'); content.appendChild(overview); }
+        if (CONFIG.showInfoButton) {
+            const buttons = el('div', 'featuredBar-buttons');
+            const btn = el('button', 'featuredBar-btn');
+            btn.textContent = CONFIG.infoButtonText;
+            btn.addEventListener('click', (e) => { e.stopPropagation(); navigateToItem(currentItem); });
+            buttons.appendChild(btn); content.appendChild(buttons);
+        }
+        const dots = el('div', 'featuredBar-dots');
+
+        bar.appendChild(bdA); bar.appendChild(bdB);
+        bar.appendChild(scrim); bar.appendChild(content); bar.appendChild(dots);
+
+        // ----- swipe + click (pointer events cover touch and mouse) -----
+        let downX = null, downY = null, downId = null, blockClick = false;
+        bar.addEventListener('pointerdown', (e) => {
+            blockClick = false; downX = e.clientX; downY = e.clientY; downId = e.pointerId;
+        });
+        bar.addEventListener('pointerup', (e) => {
+            if (downX === null) return;
+            const dx = e.clientX - downX, dy = e.clientY - downY;
+            downX = null; downId = null;
+            if (CONFIG.enableSwipe && Math.abs(dx) > CONFIG.swipeThresholdPx && Math.abs(dx) > Math.abs(dy)) {
+                blockClick = true;            // suppress the click that follows a swipe
+                if (dx < 0) step(1); else step(-1);
+            }
+        });
+        bar.addEventListener('pointercancel', () => { downX = null; downId = null; });
+        bar.addEventListener('click', () => {
+            if (blockClick) { blockClick = false; return; }
+            navigateToItem(currentItem);
+        });
+
+        els = { bdA, bdB, logo, title, meta, overview, dots };
+        return bar;
+    }
+
+    function buildDots() {
+        if (!CONFIG.showDots) return;
+        els.dots.innerHTML = '';
+        items.forEach((_, i) => {
+            const d = el('span', 'featuredBar-dot');
+            d.addEventListener('click', (e) => { e.stopPropagation(); goTo(i); });
+            els.dots.appendChild(d);
+        });
+    }
+    function updateDots() {
+        if (!CONFIG.showDots || !els.dots) return;
+        const k = els.dots.children;
+        for (let i = 0; i < k.length; i++) k[i].classList.toggle('is-active', i === index);
+    }
+
+    // Show the LOGO IMAGE for items that have one (this is what the original
+    // working version did, and what looks right). The logo element is made
+    // visible immediately and the browser paints it when loaded -- we do NOT
+    // gate its visibility on the load event. That gating is exactly what got
+    // stuck on the white-text fallback for cached logos. Title text is used
+    // ONLY when there is no logo, or as a fallback if the logo fails to load.
+    function showName(item) {
+        const myToken = ++nameToken;
+        els.logo.onload = null;
+        els.logo.onerror = null;
+
+        const hasLogo = CONFIG.showLogo && item.ImageTags && item.ImageTags.Logo;
+        if (hasLogo) {
+            els.title.style.display = 'none';
+            els.logo.style.display = 'block';            // explicit -> overrides the CSS `display:none` default
+            els.logo.onload  = function () { if (myToken === nameToken) raf(fitContent); };
+            els.logo.onerror = function () {             // logo genuinely failed -> text
+                if (myToken !== nameToken) return;
+                els.logo.style.display = 'none';
+                els.title.textContent = item.Name;
+                els.title.style.display = '';
+                raf(fitContent);
+            };
+            els.logo.src = ApiClient.getImageUrl(item.Id, { type: 'Logo', tag: item.ImageTags.Logo, maxHeight: CONFIG.logoReqHeight });
+        } else {
+            els.logo.removeAttribute('src');
+            els.logo.style.display = 'none';
+            els.title.textContent = item.Name;
+            els.title.style.display = '';
+        }
+    }
+
+    // ---------- guarantee the name fits (trim overview, never the name) ----------
+    function raf(fn) { (window.requestAnimationFrame || function (f) { setTimeout(f, 16); })(fn); }
+    function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
+    function currentMaxLines() {
+        return (window.innerWidth <= 600) ? CONFIG.overviewLinesMobile : CONFIG.overviewLinesDesktop;
+    }
+    // If the rendered content is taller than the bar, reduce the overview line
+    // count (and as a last resort hide the overview) so the name + meta + button
+    // always fit. The name is flex:0 0 auto, so it is never what gets clipped.
+    function fitContent() {
+        if (!barEl || !els.overview) return;
+        const content = els.overview.parentElement;
+        if (!content || !content.clientHeight) return;   // not laid out yet -> skip
+        els.overview.style.display = '';
+        let lines = currentMaxLines();
+        appliedLines = lines; els.overview.style.webkitLineClamp = String(lines);
+        let guard = 0;
+        while (content.scrollHeight > content.clientHeight && lines > 1 && guard < 8) {
+            lines -= 1; guard += 1;
+            appliedLines = lines; els.overview.style.webkitLineClamp = String(lines);
+        }
+        if (content.scrollHeight > content.clientHeight) els.overview.style.display = 'none';
+    }
+
+    // ---------- render ----------
+    function render(item) {
+        currentItem = item;
+        let bdUrl = '';
+        if (item.BackdropImageTags && item.BackdropImageTags[0])
+            bdUrl = ApiClient.getImageUrl(item.Id, { type: 'Backdrop', tag: item.BackdropImageTags[0], maxWidth: 1920 });
+        else if (item.ImageTags && item.ImageTags.Primary)
+            bdUrl = ApiClient.getImageUrl(item.Id, { type: 'Primary', tag: item.ImageTags.Primary, maxWidth: 1920 });
+        if (bdUrl) {
+            const incoming = frontA ? els.bdB : els.bdA, outgoing = frontA ? els.bdA : els.bdB;
+            incoming.style.backgroundImage = 'url("' + bdUrl + '")';
+            void incoming.offsetWidth;
+            incoming.style.opacity = '1'; outgoing.style.opacity = '0';
+            frontA = !frontA;
+        }
+        showName(item);
+        if (els.meta) els.meta.textContent = buildMeta(item);
+        if (els.overview) els.overview.textContent = item.Overview || '';
+        updateDots();
+        raf(fitContent);
+    }
+
+    function step(dir) {                 // dir +1 = next, -1 = prev
+        if (!items.length) return;
+        index = (index + dir + items.length) % items.length;
+        render(items[index]); resetTimer();
+    }
+    function goTo(i) { index = i; render(items[index]); resetTimer(); }
+    function resetTimer() { clearInterval(rotTimer); rotTimer = setInterval(() => step(1), CONFIG.rotateMs); }
+
+    // ---------- mount / SPA survival ----------
+    function homeSections() { return document.querySelector('#homeTab .sections'); }
+    function onHome() { const p = document.getElementById('indexPage'); return !!p && p.offsetParent !== null; }
+    function ensureMounted() {
+        if (!barEl || !onHome()) return;
+        const sc = homeSections();
+        if (sc && barEl.parentElement !== sc) sc.insertBefore(barEl, sc.firstChild);
+    }
+
+    async function start() {
+        await waitForApi();
+        injectStyles();
+        await fetchItems();
+        if (!items.length) { console.warn('[featuredBar] no items found'); return; }
+        barEl = buildBar(); buildDots();
+        index = 0; render(items[0]); resetTimer();
+        setInterval(ensureMounted, 1000); ensureMounted();
+        window.addEventListener('resize', debounce(fitContent, 150));
+        setInterval(async () => {
+            await fetchItems(); buildDots();
+            if (index >= items.length) index = 0;
+            render(items[index]);
+        }, 300000);
+    }
+
+    // expose a tiny hook so automated checks can drive it (no effect in normal use)
+    window.__featuredBar = {
+        get index() { return index; }, step, goTo, get current() { return currentItem; },
+        fit: fitContent, get appliedLines() { return appliedLines; },
+        get overviewVisible() { return els.overview ? els.overview.style.display !== 'none' : false; }
+    };
+
+    start();
+})();
