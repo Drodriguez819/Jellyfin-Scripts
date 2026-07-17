@@ -1,0 +1,438 @@
+/* Recommended */
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/fixes.css');
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/jf_font.css');
+
+/* Required */
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/base.css');
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/accentlist.css');
+
+/* Transparent Top*/
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/header/header_transparent.css');
+
+/* Login Screen */
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/login/login_frame.css');
+
+/* Theme */
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/type/colorful.css');
+
+/* Title Page*/
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/titlepage/title_banner-logo.css');
+
+/* Effects */
+@import url('https://cdn.jsdelivr.net/gh/CTalvio/Ultrachromic/effects/glassy.css');
+
+
+/* ============================================
+   UNIVERSAL — Frosted glass for item detail pages
+   (extends Ultrachromic's glassy.css)
+   This is the ORIGINAL working desktop block. It applies on every
+   platform. Critical: this block only sets `background-color: transparent`
+   on .detailImageContainer / .cardImageContainer. It deliberately does
+   NOT set `background-image: none` there, because Jellyfin renders the
+   poster artwork as a CSS background-image on .cardImageContainer.
+   ============================================ */
+
+.backdropImage {
+    filter: blur(18px) saturate(120%) contrast(120%) brightness(40%);
+}
+
+@supports (backdrop-filter: blur(15px)) {
+
+    /* Pin the main backdrop to the viewport */
+    .backdropContainer,
+    #backdropContainer,
+    .backgroundContainer {
+        position: fixed !important;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: -2 !important;
+    }
+    .backdropContainer::after,
+    .backdropContainer::before,
+    .backdropImage::after,
+    .backdropImage::before {
+        display: none !important;
+    }
+
+    /* Detail-page containers transparent so the backdrop shows through.
+       .detailImageContainer is included here ONLY for background-color —
+       its background-image (the poster) is left alone. */
+    #itemDetailPage,
+    .itemDetailPage,
+    .detailPageContent,
+    .detailPageSecondaryContainer,
+    .detailPageWrapperContainer,
+    .verticalSection,
+    .mainAnimatedPage,
+    .pageContainer,
+    .libraryPage,
+    .detailImageContainer,
+    .detailImageContainer .cardImageContainer {
+        background-color: transparent !important;
+    }
+
+    /* Frosted layer behind primary info (title / buttons / metadata + content).
+       Applies on every platform. Uses 0.35 — lighter than mobile's 0.45.
+       Targeting .detailPagePrimaryContainer (the outer wrapper) so a single
+       frosted panel covers both the title strip and the content area below.
+       No seam, no double-darkening. */
+    .detailPagePrimaryContainer {
+        background-color: rgba(0, 0, 0, 0.35) !important;
+        backdrop-filter: blur(20px) saturate(140%);
+        -webkit-backdrop-filter: blur(20px) saturate(140%);
+    }
+}
+
+
+/* ============================================
+   MOBILE / TV / DEX — Pinned item backdrop + frosted glass
+   
+   These rules need to apply on any client that uses the .layout-mobile or
+   .layout-tv layout — that includes:
+     - Phone (Android app or mobile browser): .layout-mobile, narrow window
+     - DeX with Jellyfin Android app: .layout-mobile, wide window  
+     - LG WebOS TV: .layout-tv, wide window
+   
+   They are NOT inside @media (max-width: 1000px) — DeX on a big monitor and
+   TV both run wider than 1000px but still need the frosted treatment.
+   Desktop browsers (.layout-desktop) already get a universal frosted layer
+   from the top block earlier in this file.
+   ============================================ */
+
+.layout-mobile #itemBackdrop,
+.layout-tv #itemBackdrop {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    background-size: cover !important;
+    background-position: center !important;
+    background-repeat: no-repeat !important;
+    filter: blur(12px) saturate(140%) brightness(45%) !important;
+    z-index: -1 !important;
+    opacity: 1 !important;
+}
+
+.layout-mobile .backgroundContainer,
+.layout-mobile .backdropContainer,
+.layout-tv .backgroundContainer,
+.layout-tv .backdropContainer {
+    z-index: -2 !important;
+}
+
+@supports (backdrop-filter: blur(15px)) {
+
+    /* Transparency for inner wrappers so the parent's frosted bg shows through.
+       Applies to mobile (phone, DeX) and TV layouts. */
+    .layout-mobile #itemDetailPage,
+    .layout-mobile .detailPageContent,
+    .layout-mobile .detailPageWrapperContainer,
+    .layout-mobile .detailRibbon,
+    .layout-mobile .infoWrapper,
+    .layout-mobile .verticalSection,
+    .layout-mobile .mainAnimatedPage,
+    .layout-mobile .libraryPage,
+    .layout-tv #itemDetailPage,
+    .layout-tv .detailPageContent,
+    .layout-tv .detailPageWrapperContainer,
+    .layout-tv .detailRibbon,
+    .layout-tv .infoWrapper,
+    .layout-tv .verticalSection,
+    .layout-tv .mainAnimatedPage,
+    .layout-tv .libraryPage {
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+
+    /* Frosted layer on the outer container (single panel, no seam, no stacking) */
+    .layout-mobile .detailPagePrimaryContainer,
+    .layout-tv .detailPagePrimaryContainer {
+        background-color: rgba(0, 0, 0, 0.45) !important;
+        backdrop-filter: blur(20px) saturate(140%) !important;
+        -webkit-backdrop-filter: blur(20px) saturate(140%) !important;
+    }
+
+    /* .detailLogo is the absolutely-positioned title-logo image that floats
+       above the page. backdrop-filter on .detailPagePrimaryContainer creates
+       a new stacking context which can render the logo BEHIND the frosted
+       panel — clipping it or hiding it entirely. Boost its z-index so it
+       sits on top. Don't force `position` here — Jellyfin's own CSS sets
+       position: absolute, and we don't want to override that. */
+    .layout-mobile .detailLogo,
+    .layout-tv .detailLogo {
+        z-index: 2 !important;
+    }
+
+    /* Content panel transparent — parent's tint shows through */
+    .layout-mobile #itemDetailPage .detailPagePrimaryContent,
+    .layout-mobile .detailPagePrimaryContent.padded-right,
+    .layout-tv #itemDetailPage .detailPagePrimaryContent,
+    .layout-tv .detailPagePrimaryContent.padded-right {
+        background-color: transparent !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+
+    /* Secondary container (cast & crew) — separate panel below */
+    .layout-mobile .detailPageSecondaryContainer,
+    .layout-tv .detailPageSecondaryContainer {
+        background-color: rgba(0, 0, 0, 0.35) !important;
+        backdrop-filter: blur(20px) saturate(140%) !important;
+        -webkit-backdrop-filter: blur(20px) saturate(140%) !important;
+    }
+}
+
+
+/* ============================================
+   MOBILE LAYOUT (any width) — Flex for the primary section
+   
+   These rules apply on any client with the .layout-mobile class — that's the
+   phone and DeX (DeX runs the same mobile app at any window width). 
+   
+   They DON'T apply on .layout-desktop (real desktop browser) or .layout-tv
+   (LG WebOS TV), which use Jellyfin's native wide layout where the poster
+   is sized differently and we don't want to interfere.
+   
+   Why class-gated instead of @media (max-width)?
+     - DeX uses .layout-mobile but the window can be any width up to 4K
+     - At wide DeX windows, the .detailImageContainer.hide-mobile poster is
+       hidden (by Jellyfin's own CSS via the `hide-mobile` class) and only
+       the mobile poster (.hide-desktop.hide-tv) is shown
+     - Without our flex layout firing, that mobile poster ends up adrift in
+       the page flow because nothing positions it properly at wide widths
+   ============================================ */
+
+.layout-mobile .detailRibbon .infoWrapper {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+    gap: 12px !important;
+    max-width: 100% !important;
+}
+
+.layout-mobile .infoWrapper > .detailImageContainer.hide-desktop.hide-tv {
+    flex: 0 0 auto !important;
+    margin: 0 !important;
+    /* Cap the poster's width so it doesn't crowd the title text next to it.
+       Jellyfin's default poster card can be wider than the visual space allows
+       at narrow widths, pushing the title behind it. */
+    max-width: 140px !important;
+}
+
+/* The card inside also needs constraining — the bg-image card width is set
+   inline by Jellyfin and can be larger than 140px. */
+.layout-mobile .infoWrapper > .detailImageContainer.hide-desktop.hide-tv .card,
+.layout-mobile .infoWrapper > .detailImageContainer.hide-desktop.hide-tv .cardBox,
+.layout-mobile .infoWrapper > .detailImageContainer.hide-desktop.hide-tv .cardScalable {
+    max-width: 140px !important;
+}
+
+.layout-mobile .infoWrapper > .nameContainer {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    text-align: left !important;
+    margin: 0 !important;
+}
+
+.layout-mobile .infoWrapper > .itemMiscInfo {
+    flex: 1 0 100% !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    margin: 8px 0 0 0 !important;
+}
+
+/* Title text wrapping. Covers both movie/series naming (.itemName,
+   .parentNameLast, .originalTitle) AND season-page naming (.parentName
+   without "Last", and .subtitle for "Season 1" / etc). */
+.layout-mobile .nameContainer .itemName,
+.layout-mobile .nameContainer .parentName,
+.layout-mobile .nameContainer .parentNameLast,
+.layout-mobile .nameContainer .originalTitle,
+.layout-mobile .nameContainer .subtitle {
+    max-width: 100% !important;
+    text-align: left !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    word-wrap: break-word !important;
+    overflow-wrap: break-word !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+}
+
+.layout-mobile .detailRibbon .mainDetailButtons {
+    justify-content: flex-start !important;
+}
+
+/* Clear the fixed top header so the title isn't crammed against it.
+   Applies on .layout-mobile at any width because DeX runs the mobile app
+   at wide widths too, and the fixed header is still present there. */
+.layout-mobile #itemDetailPage .detailPagePrimaryContainer {
+    padding-top: calc(
+        env(safe-area-inset-top, 0px)
+        + var(--jf-header-height, 88px)
+        + 32px
+    ) !important;
+}
+
+
+
+/* ============================================
+   Home page — synthwave gradient + frosted cards
+   ============================================ */
+
+.homePage,
+#indexPage,
+#homePage {
+    position: relative;
+}
+
+@supports (backdrop-filter: blur(15px)) {
+
+    .homePage::before,
+    #indexPage::before,
+    #homePage::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: linear-gradient(
+            180deg,
+            rgba(13, 136, 130, 0.78) 0%,
+            rgba(80, 64, 192, 0.78) 50%,
+            rgba(26, 10, 64, 0.78) 100%
+        );
+        z-index: -1;
+        pointer-events: none;
+    }
+
+    .homePage,
+    #indexPage,
+    #homePage,
+    .homePage > div,
+    .homePage .section0,
+    .homePage .section1,
+    .homePage .section2,
+    .homePage .section3,
+    .homePage .verticalSection,
+    .homePage .sectionTitleContainer,
+    .homePage .padded-bottom-page {
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+
+    .homePage .sectionTitle {
+        text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85);
+    }
+
+    .card .cardText,
+    .card .cardFooter,
+    .card .cardTextCentered {
+        background-color: rgba(0, 0, 0, 0.39);
+        backdrop-filter: blur(17px) saturate(160%);
+        -webkit-backdrop-filter: blur(17px) saturate(160%);
+        border-radius: 0 0 8px 8px;
+        padding: 6px 10px;
+    }
+
+    .card .cardBox,
+    .card .cardScalable {
+        transition: transform 0.25s ease-out, box-shadow 0.25s ease-out;
+    }
+    .card:hover .cardBox,
+    .card:hover .cardScalable {
+        transform: scale(1.03);
+        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+        z-index: 2;
+        position: relative;
+    }
+}
+
+
+/* ============================================
+   Library pages — same gradient as home
+
+   FIX (PC desktop client tint over video):
+   Jellyfin's video player page is <div id="videoOsdPage" class="page
+   libraryPage">. Because it carries the `libraryPage` class and its id is
+   NOT #itemDetailPage, the old `.libraryPage:not(#itemDetailPage)` selectors
+   matched it and painted this fixed, full-viewport, 78%-opacity gradient
+   over the player. In a normal browser the <video> element sits above the
+   z-index:-1 layer so it's invisible; in Jellyfin Desktop (JMP) the video is
+   an mpv surface rendered BEHIND the whole webview, so the gradient composites
+   on top and tints playback. Excluding #videoOsdPage below stops that.
+   ============================================ */
+
+.itemsPage,
+.libraryPage,
+#moviesPage,
+#tvshowsPage,
+#musicPage,
+#favoritesPage {
+    position: relative;
+}
+
+@supports (backdrop-filter: blur(15px)) {
+
+    .itemsPage::before,
+    .libraryPage:not(#itemDetailPage):not(#videoOsdPage)::before,
+    #moviesPage::before,
+    #tvshowsPage::before,
+    #musicPage::before,
+    #favoritesPage::before {
+        content: "";
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: linear-gradient(
+            0deg,
+            rgba(13, 136, 130, 0.78) 0%,
+            rgba(80, 64, 192, 0.78) 50%,
+            rgba(26, 10, 64, 0.78) 100%
+        );
+        z-index: -1;
+        pointer-events: none;
+    }
+
+    .itemsPage,
+    .libraryPage:not(#itemDetailPage):not(#videoOsdPage),
+    #moviesPage,
+    #tvshowsPage,
+    #musicPage,
+    #favoritesPage,
+    .itemsPage > div,
+    .itemsContainer,
+    .padded-bottom-page {
+        background-color: transparent !important;
+        background-image: none !important;
+    }
+}
+
+
+/* ============================================
+   Video player guard (belt-and-suspenders)
+
+   Verified against jellyfin-web source: Jellyfin applies NO background,
+   ::before, or ::after to #videoOsdPage itself — its only OSD darkening is a
+   gradient on the child .videoOsdBottom control bar, which is left untouched.
+   So forcing the page container and its pseudo-elements transparent here only
+   neutralizes injected theme layers, never a native scrim. This catches any
+   block (now or future) that might paint over the player surface.
+   ============================================ */
+
+#videoOsdPage,
+#videoOsdPage::before,
+#videoOsdPage::after {
+    background: transparent !important;
+}
+#videoOsdPage::before,
+#videoOsdPage::after {
+    content: none !important;
+}
